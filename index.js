@@ -301,8 +301,26 @@ app.get("/api/stats", async (_req, res) => {
   let tasks = [];
   try {
     const { blobs } = await blobList({ prefix: "tasks/", limit: 100 });
-    const recent = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)).slice(0, 20);
+    const recent = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)).slice(0, 30);
     tasks = (await Promise.all(recent.map((b) => readTask(b.pathname.slice(6, -5))))).filter((t) => t?.id && t?.status);
+  } catch {}
+
+  let memoryCount = 0;
+  try {
+    memoryCount = (await blobList({ prefix: "memory/", limit: 1000 })).blobs.length;
+  } catch {}
+
+  let schedules = [];
+  try {
+    const { blobs } = await blobList({ prefix: "schedule/", limit: 100 });
+    const recent = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)).slice(0, 10);
+    schedules = (await Promise.all(recent.map((b) => readJson(b.pathname))))
+      .filter((s) => s?.id)
+      .map((s) => {
+        let host = "";
+        try { host = new URL(s.url).hostname; } catch {}
+        return { id: s.id, at: s.at, status: s.status, result: s.result || "", host };
+      });
   } catch {}
 
   const count = (st) => tasks.filter((t) => t.status === st).length;
@@ -314,6 +332,8 @@ app.get("/api/stats", async (_req, res) => {
     paymentsCount: payments.length,
     payments: payments.slice(0, 20),
     tasks: { open: count("open"), claimed: count("claimed"), done: count("done"), recent: tasks },
+    memoryCount,
+    schedules,
     updatedAt: new Date().toISOString(),
   };
   statsCache = { t: Date.now(), data };
