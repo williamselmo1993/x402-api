@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>x402 API — dashboard</title>
+<style>
+  :root {
+    --bg: #fafaf9; --surface: #ffffff; --border: #e7e5e4;
+    --ink: #1c1917; --ink-2: #57534e; --ink-3: #a8a29e;
+    --accent: #0d7377;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131211; --surface: #1c1a19; --border: #2e2b29;
+      --ink: #f5f5f4; --ink-2: #bab5b1; --ink-3: #78716c;
+      --accent: #4dd4d9;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 880px; margin: 0 auto; padding: 24px 16px 48px;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; font-weight: 650; }
+  #updated { color: var(--ink-3); font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--ink-2); font-size: 13px; margin-bottom: 4px; }
+  .tile .value { font-size: 28px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tile .value.money { color: var(--accent); }
+  .tile .sub { color: var(--ink-3); font-size: 12px; margin-top: 2px; }
+  h2 { font-size: 15px; font-weight: 650; margin: 24px 0 10px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { text-align: left; color: var(--ink-2); font-weight: 550; font-size: 12.5px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+  td.num { text-align: right; white-space: nowrap; }
+  th.num { text-align: right; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .badge { display: inline-block; font-size: 12px; font-weight: 550; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--border); color: var(--ink-2); }
+  .badge.done { color: var(--accent); border-color: var(--accent); }
+  .empty { color: var(--ink-3); padding: 18px 14px; font-size: 14px; }
+  .mono { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .goalbar { background: var(--border); border-radius: 99px; height: 8px; margin-top: 8px; overflow: hidden; }
+  .goalbar > div { background: var(--accent); height: 100%; border-radius: 99px; transition: width .6s; }
+</style>
+</head>
+<body>
+<header>
+  <h1>x402 API — incassi e attività</h1>
+  <span id="updated">carico…</span>
+</header>
+
+<div class="tiles">
+  <div class="tile"><div class="label">USDC ricevuti (totale)</div><div class="value money" id="revenue">—</div><div class="sub" id="wallet"></div></div>
+  <div class="tile"><div class="label" id="goalLabel">Obiettivo</div><div class="value" id="goalPct">—</div>
+    <div class="goalbar" role="progressbar" aria-label="avanzamento obiettivo"><div id="goalFill" style="width:0%"></div></div></div>
+  <div class="tile"><div class="label">Pagamenti ricevuti</div><div class="value" id="payCount">—</div></div>
+  <div class="tile"><div class="label">Task aperti</div><div class="value" id="tOpen">—</div></div>
+  <div class="tile"><div class="label">Task completati</div><div class="value" id="tDone">—</div><div class="sub" id="tClaimed"></div></div>
+</div>
+
+<h2>Ultimi pagamenti ricevuti</h2>
+<div class="card">
+  <table id="payTable" hidden>
+    <thead><tr><th>Quando</th><th>Da</th><th class="num">USDC</th><th>Tx</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="empty" id="payEmpty">Nessun pagamento ancora — appena un agente paga, appare qui.</div>
+</div>
+
+<h2>Attività taskboard</h2>
+<div class="card">
+  <table id="taskTable" hidden>
+    <thead><tr><th>Quando</th><th>Task</th><th>Stato</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="empty" id="taskEmpty">Nessun task ancora.</div>
+</div>
+
+<script>
+const fmtUsd = (n) => n.toLocaleString("it-IT", { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+const fmtTs = (t) => new Date(t).toLocaleString("it-IT", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const short = (a) => a ? a.slice(0, 6) + "…" + a.slice(-4) : "";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function refresh() {
+  try {
+    const s = await fetch("/api/stats").then((r) => r.json());
+    document.getElementById("revenue").textContent = fmtUsd(s.revenueUsd);
+    document.getElementById("wallet").textContent = short(s.wallet) + " · " + s.network;
+    document.getElementById("payCount").textContent = s.paymentsCount;
+    const pct = Math.min(100, (s.revenueUsd / s.goalUsd) * 100);
+    document.getElementById("goalLabel").textContent = `Obiettivo $${s.goalUsd}`;
+    document.getElementById("goalPct").textContent = pct.toFixed(1) + "%";
+    document.getElementById("goalFill").style.width = pct + "%";
+    document.getElementById("tOpen").textContent = s.tasks.open;
+    document.getElementById("tDone").textContent = s.tasks.done;
+    document.getElementById("tClaimed").textContent = s.tasks.claimed + " in lavorazione";
+
+    const pt = document.getElementById("payTable");
+    pt.hidden = !s.payments.length;
+    document.getElementById("payEmpty").hidden = !!s.payments.length;
+    pt.tBodies[0].innerHTML = s.payments.map((p) =>
+      `<tr><td>${fmtTs(p.ts)}</td><td class="mono">${short(p.from)}</td><td class="num">${fmtUsd(p.usd)}</td>` +
+      `<td><a href="https://basescan.org/tx/${p.hash}" target="_blank" rel="noopener">↗</a></td></tr>`).join("");
+
+    const tt = document.getElementById("taskTable");
+    tt.hidden = !s.tasks.recent.length;
+    document.getElementById("taskEmpty").hidden = !!s.tasks.recent.length;
+    tt.tBodies[0].innerHTML = s.tasks.recent.map((t) =>
+      `<tr><td>${fmtTs(t.createdAt)}</td><td>${esc(t.title)}</td>` +
+      `<td><span class="badge ${t.status === "done" ? "done" : ""}">${t.status}</span></td></tr>`).join("");
+
+    document.getElementById("updated").textContent = "aggiornato " + new Date().toLocaleTimeString("it-IT");
+  } catch {
+    document.getElementById("updated").textContent = "errore di aggiornamento, riprovo…";
+  }
+}
+refresh();
+setInterval(refresh, 30000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+</script>
+</body>
+</html>
